@@ -4,219 +4,174 @@ from redbot.core.bot import Red
 import math
 import time
 
+try:
+    from dashboard.rpc import rpc
+    DASH_AVAILABLE = True
+except Exception:
+    DASH_AVAILABLE = False
+
 
 class RPXP(commands.Cog):
     """
-    RPXP (Roleplay Experience System)
-
-    Automatically grants XP to users based on message length in RP channels.
-
-    Features:
-    • XP every Y message-units
-    • message-units = ceil(words / words_per_unit)
-    • anti-spam minimum word requirement
-    • per-message cooldown
-    • RP-only channel whitelist
-    • announcement channel ping
+    RP XP system for Westmarch-style servers.
+    Now includes:
+    - Word-based XP multipliers
+    - Anti-spam minimum word filter
+    - Cooldown per message (not per award)
+    - Award X XP every Y qualifying messages
+    - Announcement channel + user ping
     """
 
     def __init__(self, bot: Red):
         self.bot = bot
 
         self.config = Config.get_conf(
-            self, identifier=823742347892998, force_registration=True
+            self,
+            identifier=9182374912374918273,
+            force_registration=True,
         )
 
         default_guild = {
             "enabled": True,
-            "rp_channels": [],
-            "messages_needed": 5,
-            "xp_award": 10,
-            "cooldown_seconds": 15,     # per-message cooldown
-            "announce_channel": None,
-            "words_per_unit": 25,
-            "min_words": 8,             # anti-spam
+            "rp_channels": [],             # eligible RP channels
+            "announce_channel": None,      # XP announcements
+            "xp_per_award": 5,             # X XP
+            "msg_per_award": 10,           # every Y messages
+            "min_words": 5,                # minimum word count
+            "words_per_count": 25,         # award count = ceil(words/words_per_count)
+            "cooldown_seconds": 30,        # per MESSAGE cooldown
         }
 
         default_member = {
+            "last_message_time": 0,        # cooldown timer
+            "message_counter": 0,          # counts messages toward award threshold
             "xp": 0,
-            "msg_count": 0,             # message-units stored
-            "last_message_time": 0.0,
         }
 
         self.config.register_guild(**default_guild)
         self.config.register_member(**default_member)
 
-    # =====================================================
-    # CORE RPXP LOGIC
-    # =====================================================
+        if DASH_AVAILABLE:
+            rpc.register_cog(self)
+
+    # -------------------------------
+    # DASHBOARD RPC SUPPORT
+    # -------------------------------
+    if DASH_AVAILABLE:
+        @rpc.with_action(name="get_config", description="Fetch RPXP config")
+        async def dashboard_get_config(self, guild_id: int):
+            guild = self.bot.get_guild(guild_id)
+            return await self.config.guild(guild).all()
+
+        @rpc.with_action(name="update_config", description="Update RPXP config")
+        async def dashboard_update_config(self, guild_id: int, data: dict):
+            guild = self.bot.get_guild(guild_id)
+            conf = self.config.guild(guild)
+
+            for key, value in data.items():
+                if hasattr(conf, key):
+                    await getattr(conf, key).set(value)
+
+            return {"status": "ok"}
+
+    # -------------------------------------
+    # MESSAGE LISTENER (MAIN LOGIC)
+    # -------------------------------------
     @commands.Cog.listener()
     async def on_message_without_command(self, message: discord.Message):
 
-        # Ignore DMs and bots
         if not message.guild or message.author.bot:
             return
 
-        g = await self.config.guild(message.guild).all()
-        if not g["enabled"]:
+        guild_conf = await self.config.guild(message.guild).all()
+        if not guild_conf["enabled"]:
             return
 
-        # Must be an RP channel
-        if message.channel.id not in g["rp_channels"]:
+        if message.channel.id not in guild_conf["rp_channels"]:
             return
 
-        m = await self.config.member(message.author).all()
+        # ---------- MINIMUM WORD FILTER ----------
+        words = message.content.split()
+        if len(words) < guild_conf["min_words"]:
+            return
+
+        # ---------- PER-MESSAGE COOLDOWN ----------
+        member_conf = await self.config.member(message.author).all()
         now = time.time()
 
-        # Anti-spam minimum word requirement
-        words = len(message.content.split())
-        if words < g["min_words"]:
+        if now - member_conf["last_message_time"] < guild_conf["cooldown_seconds"]:
             return
 
-        # Per-message cooldown
-        if now - m["last_message_time"] < g["cooldown_seconds"]:
-            return
-
-        # Accept message
         await self.config.member(message.author).last_message_time.set(now)
 
-        # Convert words → message-units
-        units = max(1, math.ceil(words / g["words_per_unit"]))
+        # ---------- WORD-BASED MESSAGE MULTIPLIER ----------
+        multiplier = math.ceil(len(words) / guild_conf["words_per_count"])
 
-        new_count = m["msg_count"] + units
-        await self.config.member(message.author).msg_count.set(new_count)
+        # ---------- MESSAGE COUNTER FOR THRESHOLD ----------
+        new_count = member_conf["message_counter"] + multiplier
+        await self.config.member(message.author).message_counter.set(new_count)
 
-        # Not enough message-units yet
-        if new_count < g["messages_needed"]:
+        # ---------- ONLY AWARD XP WHEN THRESHOLD HIT ----------
+        if new_count < guild_conf["msg_per_award"]:
             return
 
-        # Award XP
-        new_xp = m["xp"] + g["xp_award"]
-        await self.config.member(message.author).xp.set(new_xp)
+        # Award time!
+        xp_gain = guild_conf["xp_per_award"]
+        total_xp = member_conf["xp"] + xp_gain
 
-        # Reset progress
-        await self.config.member(message.author).msg_count.set(0)
+        await self.config.member(message.author).xp.set(total_xp)
+        await self.config.member(message.author).message_counter.set(0)
 
-        # Announce award
-        ann_id = g["announce_channel"]
-        if ann_id:
-            chan = message.guild.get_channel(ann_id)
-            if chan:
-                try:
-                    await chan.send(
-                        f"🎉 <@{message.author.id}> earned XP for RP activity!"
-                    )
-                except discord.Forbidden:
-                    pass
+        # ---------- ANNOUNCEMENT ----------
+        channel_id = guild_conf["announce_channel"]
+        if channel_id:
+            ch = message.guild.get_channel(channel_id)
+            if ch:
+                await ch.send(
+                    f"✨ **RP XP Awarded!** ✨\n"
+                    f"{message.author.mention} gained **{xp_gain} XP** for RP."
+                )
 
-    # =====================================================
+    # -------------------------------------
     # COMMANDS
-    # =====================================================
+    # -------------------------------------
+
     @commands.group(name="rpxp")
     @commands.guild_only()
     async def rpxp_group(self, ctx):
-        """
-        RPXP (Roleplay Experience System)
-
-        Commands for configuring and viewing RPXP.
-        Use `?help rpxp` for a full command list.
-        """
+        """RPXP admin commands."""
         pass
 
-    # -----------------------------------------------------
-    # Admin Commands
-    # -----------------------------------------------------
-    @rpxp_group.command(name="toggle")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def rpxp_toggle(self, ctx):
-        """Toggle the RPXP system on or off."""
-        enabled = await self.config.guild(ctx.guild).enabled()
-        await self.config.guild(ctx.guild).enabled.set(not enabled)
-        await ctx.send(f"RPXP enabled: **{not enabled}**")
+    @rpxp_group.command(name="stats")
+    async def rpxp_stats(self, ctx, member: discord.Member = None):
+        """Check your (or someone else’s) RPXP."""
+        member = member or ctx.author
+        data = await self.config.member(member).all()
 
-    @rpxp_group.command(name="addchannel")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def rpxp_addchannel(self, ctx, channel: discord.TextChannel):
-        """Add a channel where RP messages grant XP."""
-        chans = await self.config.guild(ctx.guild).rp_channels()
-        if channel.id not in chans:
-            chans.append(channel.id)
-            await self.config.guild(ctx.guild).rp_channels.set(chans)
-        await ctx.send(f"Added RP channel: {channel.mention}")
+        await ctx.send(
+            f"**{member.display_name}** has **{data['xp']} XP**.\n"
+            f"Message progress: {data['message_counter']} messages toward next award."
+        )
 
-    @rpxp_group.command(name="removechannel")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def rpxp_removechannel(self, ctx, channel: discord.TextChannel):
-        """Remove an RP channel."""
-        chans = await self.config.guild(ctx.guild).rp_channels()
-        if channel.id in chans:
-            chans.remove(channel.id)
-            await self.config.guild(ctx.guild).rp_channels.set(chans)
-        await ctx.send(f"Removed RP channel: {channel.mention}")
-
-    @rpxp_group.command(name="setannounce")
+    @rpxp_group.command(name="announce")
     @commands.admin_or_permissions(manage_guild=True)
     async def rpxp_setannounce(self, ctx, channel: discord.TextChannel):
-        """Set the channel where XP awards are announced."""
+        """Set the channel where RPXP gets announced."""
         await self.config.guild(ctx.guild).announce_channel.set(channel.id)
-        await ctx.send(f"XP awards will now be announced in {channel.mention}.")
+        await ctx.send(f"Announcement channel set to {channel.mention}")
 
-    @rpxp_group.command(name="setwords")
+    @rpxp_group.command(name="setchannels")
     @commands.admin_or_permissions(manage_guild=True)
-    async def rpxp_setwords(self, ctx, words: int):
-        """Set how many words = 1 message-unit."""
-        await self.config.guild(ctx.guild).words_per_unit.set(words)
-        await ctx.send(f"Words per unit set to **{words}**.")
-
-    @rpxp_group.command(name="setminwords")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def rpxp_setminwords(self, ctx, words: int):
-        """Set the minimum words required for XP to count."""
-        await self.config.guild(ctx.guild).min_words.set(words)
-        await ctx.send(f"Minimum word requirement set to **{words}**.")
-
-    @rpxp_group.command(name="setthreshold")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def rpxp_setthreshold(self, ctx, units: int):
-        """Set how many message-units are required to award XP."""
-        await self.config.guild(ctx.guild).messages_needed.set(units)
-        await ctx.send(f"Message-unit threshold set to **{units}**.")
-
-    @rpxp_group.command(name="setcooldown")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def rpxp_setcooldown(self, ctx, seconds: int):
-        """Set the per-message cooldown."""
-        await self.config.guild(ctx.guild).cooldown_seconds.set(seconds)
-        await ctx.send(f"Message cooldown set to **{seconds} seconds**.")
-
-    @rpxp_group.command(name="setxp")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def rpxp_setxp(self, ctx, xp: int):
-        """Set the amount of XP awarded when the threshold is reached."""
-        await self.config.guild(ctx.guild).xp_award.set(xp)
-        await ctx.send(f"XP award amount set to **{xp}**.")
-
-    @rpxp_group.command(name="addxp")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def rpxp_addxp(self, ctx, user: discord.Member, xp: int):
-        """Add XP to a user manually."""
-        cur = await self.config.member(user).xp()
-        await self.config.member(user).xp.set(cur + xp)
-        await ctx.send(f"Added **{xp} XP** to **{user.display_name}**.")
-
-    # -----------------------------------------------------
-    # User Commands
-    # -----------------------------------------------------
-    @rpxp_group.command(name="stats")
-    async def rpxp_stats(self, ctx, user: discord.Member = None):
-        """
-        Show RPXP stats for yourself or another member.
-        Example:
-            ?rpxp stats @User
-        """
-        user = user or ctx.author
-        data = await self.config.member(user).all()
+    async def rpxp_setchannels(self, ctx, *channels: discord.TextChannel):
+        ids = [ch.id for ch in channels]
+        await self.config.guild(ctx.guild).rp_channels.set(ids)
         await ctx.send(
-            f"**{user.display_name}** has **{data['xp']} XP**.\n"
-            f"Message-units toward next award: `{data['msg_count']}`."
+            f"RP channels updated: {', '.join(ch.mention for ch in channels)}"
         )
+
+    @rpxp_group.command(name="add")
+    @commands.admin_or_permissions(manage_guild=True)
+    async def rpxp_add(self, ctx, member: discord.Member, xp: int):
+        cur = await self.config.member(member).xp()
+        await self.config.member(member).xp.set(cur + xp)
+        await ctx.send(f"Added **{xp} XP** to **{member.display_name}**.")
