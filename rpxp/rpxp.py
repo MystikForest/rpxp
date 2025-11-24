@@ -18,7 +18,7 @@ class RPXP(commands.Cog):
     RP XP system for Westmarch / West Marches style D&D servers.
 
     Features:
-    - XP only from designated RP channels (text OR forum)
+    - XP from designated RP channels (Text OR Forum)
     - XP from threads inside RP channels
     - XP from forum posts inside forum RP channels
     - Word-based multiplier (ceil(words / words_per_count))
@@ -62,7 +62,6 @@ class RPXP(commands.Cog):
         self.config.register_guild(**default_guild)
         self.config.register_member(**default_member)
 
-        # Register for Dashboard UI
         if DASH_AVAILABLE:
             rpc.register_cog(self)
 
@@ -98,34 +97,47 @@ class RPXP(commands.Cog):
             return
 
         rp_channels = guild_conf["rp_channels"]
-
-        # =============================
-        # CHANNEL + THREAD DETECTION
-        # =============================
         ch = message.channel
+        parent = getattr(ch, "parent", None)
+        parent_id = parent.id if parent else None
+
+        # ==========================================
+        # UNIVERSAL THREAD + FORUM POST DETECTION
+        # ==========================================
+        # Forum posts in Red's discord.py often appear as TextChannel,
+        # NOT Thread, but with .parent being a ForumChannel.
+        is_forum_post = (
+            isinstance(ch, discord.TextChannel)
+            and isinstance(parent, ForumChannel)
+        )
+
         in_rp_channel = False
 
-        # 1) Direct RP channel (text OR forum)
+        # Case 1: Direct RP channel (text OR forum)
         if ch.id in rp_channels:
             in_rp_channel = True
 
-        # 2) Thread under text channel
-        elif isinstance(ch, discord.Thread) and ch.parent_id in rp_channels:
+        # Case 2: Thread under RP channel
+        elif isinstance(ch, discord.Thread) and parent_id in rp_channels:
             in_rp_channel = True
 
-        # 3) Forum post (thread whose parent is a ForumChannel)
-        elif isinstance(ch, discord.Thread) and isinstance(ch.parent, ForumChannel) and ch.parent.id in rp_channels:
+        # Case 3: Forum post (TextChannel with a Forum parent)
+        elif is_forum_post and parent_id in rp_channels:
             in_rp_channel = True
 
         if not in_rp_channel:
             return
 
+        # ==========================================
         # Minimum word filter
+        # ==========================================
         words = message.content.split()
         if len(words) < guild_conf["min_words"]:
             return
 
+        # ==========================================
         # Per-message cooldown
+        # ==========================================
         member_conf = await self.config.member(message.author).all()
         now = time.time()
         if now - member_conf["last_message_time"] < guild_conf["cooldown_seconds"]:
@@ -133,7 +145,9 @@ class RPXP(commands.Cog):
 
         await self.config.member(message.author).last_message_time.set(now)
 
+        # ==========================================
         # Word multiplier
+        # ==========================================
         multiplier = max(1, math.ceil(len(words) / guild_conf["words_per_count"]))
 
         # Add message weight
@@ -144,14 +158,18 @@ class RPXP(commands.Cog):
         if new_count < guild_conf["msg_per_award"]:
             return
 
+        # ==========================================
         # Award XP
+        # ==========================================
         xp_gain = guild_conf["xp_per_award"]
         new_xp = member_conf["xp"] + xp_gain
 
-        await self.config.member(message.author).xp.set(new_xp)
+        await self.config.member(message.author).xp.set(new_xx := new_xp)
         await self.config.member(message.author).message_counter.set(0)
 
+        # ==========================================
         # Announce
+        # ==========================================
         ann_id = guild_conf["announce_channel"]
         if ann_id:
             channel = message.guild.get_channel(ann_id)
@@ -173,7 +191,6 @@ class RPXP(commands.Cog):
         """RPXP commands"""
         pass
 
-    # ---------- USER COMMAND ----------
     @rpxp_group.command(name="stats")
     async def rpxp_stats(self, ctx, member: discord.Member = None):
         """Check your XP."""
@@ -216,7 +233,6 @@ class RPXP(commands.Cog):
             f"Cooldown Seconds: `{conf['cooldown_seconds']}`"
         )
 
-    # ---------- ADMIN: SET AWARD PARAMETERS ----------
     @rpxp_config.command(name="setaward")
     async def rpxp_config_setaward(self, ctx, xp_per: int, msgs: int):
         """Set X XP per Y messages."""
@@ -224,7 +240,6 @@ class RPXP(commands.Cog):
         await self.config.guild(ctx.guild).msg_per_award.set(msgs)
         await ctx.send(f"Set award: **{xp_per} XP** every **{msgs} messages**.")
 
-    # ---------- ADMIN: SET WORD PARAMETERS ----------
     @rpxp_config.command(name="setwords")
     async def rpxp_config_setwords(self, ctx, min_words: int, words_per_count: int):
         """Set minimum words and words-per-count threshold."""
@@ -234,7 +249,6 @@ class RPXP(commands.Cog):
             f"Set minimum words to **{min_words}**, word multiplier chunk to **{words_per_count}**."
         )
 
-    # ---------- ADMIN: SET COOLDOWN ----------
     @rpxp_config.command(name="setcooldown")
     async def rpxp_config_setcooldown(self, ctx, seconds: int):
         """Set per-message cooldown."""
@@ -267,13 +281,11 @@ class RPXP(commands.Cog):
 
         await ctx.send(f"Removed {channel.mention} from RPXP channels.")
 
-    # ---------- ADMIN: ANNOUNCEMENT CHANNEL ----------
     @rpxp_config.command(name="setannounce")
     async def rpxp_setannounce(self, ctx, channel: discord.TextChannel):
         await self.config.guild(ctx.guild).announce_channel.set(channel.id)
         await ctx.send(f"Announcement channel set to {channel.mention}")
 
-    # ---------- ADMIN: TOGGLE ----------
     @rpxp_config.command(name="enable")
     async def rpxp_enable(self, ctx):
         await self.config.guild(ctx.guild).enabled.set(True)
