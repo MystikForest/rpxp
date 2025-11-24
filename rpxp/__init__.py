@@ -1,4 +1,5 @@
 from .rpxp import RPXP
 
 async def setup(bot):
-    await bot.add_cog(RPXP(bot))
+    cog = RPXP(bot)
+    await bot.add_cog(cog)
