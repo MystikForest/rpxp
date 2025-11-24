@@ -1,4 +1,5 @@
 import discord
+from discord import TextChannel, ForumChannel
 from redbot.core import commands, Config
 from redbot.core.bot import Red
 import math
@@ -17,7 +18,9 @@ class RPXP(commands.Cog):
     RP XP system for Westmarch / West Marches style D&D servers.
 
     Features:
-    - XP only from designated RP channels
+    - XP only from designated RP channels (text OR forum)
+    - XP from threads inside RP channels
+    - XP from forum posts inside forum RP channels
     - Word-based multiplier (ceil(words / words_per_count))
     - Minimum word requirement (anti-spam)
     - Per-message cooldown
@@ -94,24 +97,24 @@ class RPXP(commands.Cog):
         if not guild_conf["enabled"]:
             return
 
-
         rp_channels = guild_conf["rp_channels"]
 
         # =============================
         # CHANNEL + THREAD DETECTION
         # =============================
+        ch = message.channel
         in_rp_channel = False
 
-        # Direct channel
-        if message.channel.id in rp_channels:
+        # 1) Direct RP channel (text OR forum)
+        if ch.id in rp_channels:
             in_rp_channel = True
 
-        # Thread under RP channel
-        elif isinstance(message.channel, discord.Thread) and message.channel.parent_id in rp_channels:
+        # 2) Thread under text channel
+        elif isinstance(ch, discord.Thread) and ch.parent_id in rp_channels:
             in_rp_channel = True
 
-        # Forum post thread
-        elif hasattr(message.channel, "parent") and message.channel.parent and message.channel.parent.id in rp_channels:
+        # 3) Forum post (thread whose parent is a ForumChannel)
+        elif isinstance(ch, discord.Thread) and isinstance(ch.parent, ForumChannel) and ch.parent.id in rp_channels:
             in_rp_channel = True
 
         if not in_rp_channel:
@@ -238,21 +241,30 @@ class RPXP(commands.Cog):
         await self.config.guild(ctx.guild).cooldown_seconds.set(seconds)
         await ctx.send(f"Set cooldown to **{seconds} seconds**.")
 
-    # ---------- ADMIN: MANAGE CHANNELS ----------
+    # ---------- ADMIN: MANAGE CHANNELS (TEXT + FORUM) ----------
     @rpxp_config.command(name="addchannel")
-    async def rpxp_addchannel(self, ctx, channel: discord.TextChannel):
+    async def rpxp_addchannel(self, ctx, channel: discord.abc.GuildChannel):
+        """Add a text or forum channel to RPXP tracking."""
+        if not isinstance(channel, (TextChannel, ForumChannel)):
+            return await ctx.send("❌ Only text channels or forum channels can be RPXP sources.")
+
         rp_channels = await self.config.guild(ctx.guild).rp_channels()
+
         if channel.id not in rp_channels:
             rp_channels.append(channel.id)
             await self.config.guild(ctx.guild).rp_channels.set(rp_channels)
+
         await ctx.send(f"Added {channel.mention} as an RPXP channel.")
 
     @rpxp_config.command(name="removechannel")
-    async def rpxp_removechannel(self, ctx, channel: discord.TextChannel):
+    async def rpxp_removechannel(self, ctx, channel: discord.abc.GuildChannel):
+        """Remove a text or forum channel from RPXP tracking."""
         rp_channels = await self.config.guild(ctx.guild).rp_channels()
+
         if channel.id in rp_channels:
             rp_channels.remove(channel.id)
             await self.config.guild(ctx.guild).rp_channels.set(rp_channels)
+
         await ctx.send(f"Removed {channel.mention} from RPXP channels.")
 
     # ---------- ADMIN: ANNOUNCEMENT CHANNEL ----------
