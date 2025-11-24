@@ -94,8 +94,27 @@ class RPXP(commands.Cog):
         if not guild_conf["enabled"]:
             return
 
-        # RP channel check
-        if message.channel.id not in guild_conf["rp_channels"]:
+
+        rp_channels = guild_conf["rp_channels"]
+
+        # =============================
+        # CHANNEL + THREAD DETECTION
+        # =============================
+        in_rp_channel = False
+
+        # Direct channel
+        if message.channel.id in rp_channels:
+            in_rp_channel = True
+
+        # Thread under RP channel
+        elif isinstance(message.channel, discord.Thread) and message.channel.parent_id in rp_channels:
+            in_rp_channel = True
+
+        # Forum post thread
+        elif hasattr(message.channel, "parent") and message.channel.parent and message.channel.parent.id in rp_channels:
+            in_rp_channel = True
+
+        if not in_rp_channel:
             return
 
         # Minimum word filter
