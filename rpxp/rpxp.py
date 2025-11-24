@@ -101,7 +101,7 @@ class RPXP(commands.Cog):
             if chan:
                 try:
                     await chan.send(
-                        f"🎉 <@{message.author.id}> earned XP for RP activity! Run `!rpxp` to claim it!"
+                        f"🎉 <@{message.author.id}> earned XP for RP activity! Run !rpxp to claim it!"
                     )
                 except discord.Forbidden:
                     pass
