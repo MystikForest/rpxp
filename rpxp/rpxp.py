@@ -137,7 +137,7 @@ class RPXP(commands.Cog):
                 try:
                     await channel.send(
                         f"✨ **RP XP Awarded!** ✨\n"
-                        f"{message.author.mention} gained **{xp_gain} XP**!"
+                        f"{message.author.mention} gained XP for RP! Run `!rpxp` to claim it!"
                     )
                 except discord.Forbidden:
                     pass
