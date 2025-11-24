@@ -129,7 +129,7 @@ class RPXP(commands.Cog):
             if ch:
                 await ch.send(
                     f"✨ **RP XP Awarded!** ✨\n"
-                    f"{message.author.mention} gained **{xp_gain} XP** for RP."
+                    f"{message.author.mention} gained XP for RP. Use `!rpxp` to claim it!"
                 )
 
     # -------------------------------------
