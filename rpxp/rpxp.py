@@ -257,8 +257,10 @@ class RPXP(commands.Cog):
 
     # ---------- ADMIN: MANAGE CHANNELS (TEXT + FORUM) ----------
     @rpxp_config.command(name="addchannel")
-    async def rpxp_addchannel(self, ctx, channel: discord.abc.GuildChannel):
+    async def rpxp_addchannel(self, ctx, *, channel: discord.abc.GuildChannel):
         """Add a text or forum channel to RPXP tracking."""
+
+        # Allow both TextChannels and ForumChannels
         if not isinstance(channel, (TextChannel, ForumChannel)):
             return await ctx.send("❌ Only text channels or forum channels can be RPXP sources.")
 
@@ -271,8 +273,9 @@ class RPXP(commands.Cog):
         await ctx.send(f"Added {channel.mention} as an RPXP channel.")
 
     @rpxp_config.command(name="removechannel")
-    async def rpxp_removechannel(self, ctx, channel: discord.abc.GuildChannel):
+    async def rpxp_removechannel(self, ctx, *, channel: discord.abc.GuildChannel):
         """Remove a text or forum channel from RPXP tracking."""
+
         rp_channels = await self.config.guild(ctx.guild).rp_channels()
 
         if channel.id in rp_channels:
